@@ -1,0 +1,77 @@
+# Fly.io configuration for the reminder backend.
+#
+# Two processes run from the same image; the worker process drains the
+# scheduler outbox so it does not share fate with the API.
+#
+# Multi-AZ HA comes from:
+#   - min_machines_running = 2 for the api process
+#   - rolling deploy strategy
+#   - Fly Postgres HA cluster attached via `fly pg attach`
+#
+# To deploy:
+#   fly launch --no-deploy --copy-config infra/fly.toml
+#   fly pg create --name reminders-db --region iad --vm-size shared-cpu-2x --ha
+#   fly pg attach reminders-db
+#   fly secrets set APNS_KEY_P8="..." APNS_KEY_ID=... APNS_TEAM_ID=... \
+#                   APPLE_BUNDLE_ID=com.example.TaskReminder \
+#                   JWT_SIGNING_KEY="$(openssl rand -hex 64)"
+#   fly deploy --config infra/fly.toml
+
+app = "reminder-backend"
+primary_region = "iad"
+kill_signal = "SIGTERM"
+kill_timeout = "30s"
+
+[build]
+dockerfile = "Dockerfile"
+
+[experimental]
+auto_rollback = true
+
+[deploy]
+strategy = "rolling"
+release_command = "/app/Run migrate --yes"
+
+[processes]
+api = "serve --hostname 0.0.0.0 --port 8080"
+worker = "worker"
+
+[env]
+LOG_LEVEL = "info"
+RUN_MODE = "api"            # overridden per-process below via process group env
+AUTO_MIGRATE = "false"
+APNS_USE_SANDBOX = "false"
+
+[[services]]
+internal_port = 8080
+protocol = "tcp"
+processes = ["api"]
+auto_stop_machines = false
+auto_start_machines = true
+min_machines_running = 2
+
+  [[services.ports]]
+  port = 80
+  handlers = ["http"]
+  force_https = true
+
+  [[services.ports]]
+  port = 443
+  handlers = ["tls", "http"]
+
+  [[services.http_checks]]
+  interval = "10s"
+  grace_period = "10s"
+  method = "get"
+  path = "/readyz"
+  timeout = "2s"
+
+[[vm]]
+size = "shared-cpu-1x"
+memory = "512mb"
+processes = ["api"]
+
+[[vm]]
+size = "shared-cpu-1x"
+memory = "256mb"
+processes = ["worker"]
