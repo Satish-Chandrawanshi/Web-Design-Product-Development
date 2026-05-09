@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+
+jobs:
+  server:
+    name: Vapor build + test
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: reminders_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/reminders_test
+      JWT_SIGNING_KEY: test-key-for-ci-only-not-secret
+      APPLE_BUNDLE_ID: com.example.TaskReminder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: vapor/swiftly-action@v0.2
+        with:
+          toolchain: 5.10
+      - name: swift build
+        working-directory: server
+        run: swift build
+      - name: swift test
+        working-directory: server
+        run: swift test --enable-test-discovery
+
+  ios-syntax:
+    name: iOS swift-format check
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install swift-format
+        run: brew install swift-format
+      - name: swift-format lint
+        run: |
+          find ios -name '*.swift' -print0 | xargs -0 swift-format lint --strict

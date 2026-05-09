@@ -21,5 +21,15 @@
     <string>Automatic</string>
     <key>NSUserNotificationUsageDescription</key>
     <string>Task Reminder uses notifications to alert you about upcoming tasks.</string>
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>remote-notification</string>
+        <string>fetch</string>
+        <string>processing</string>
+    </array>
+    <key>BGTaskSchedulerPermittedIdentifiers</key>
+    <array>
+        <string>com.taskreminder.sync</string>
+    </array>
 </dict>
 </plist>

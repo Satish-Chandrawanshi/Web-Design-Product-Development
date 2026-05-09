@@ -2,8 +2,11 @@ import Foundation
 
 @MainActor
 final class TaskViewModel: ObservableObject {
+    enum SyncState: Equatable { case idle, syncing, error(String) }
+
     @Published private(set) var tasks: [Task]
     @Published private(set) var filteredTasks: [Task] = []
+    @Published private(set) var syncState: SyncState = .idle
     @Published var sortOption: TaskSortOption = .dueDate {
         didSet { applyFilters() }
     }
@@ -21,6 +24,47 @@ final class TaskViewModel: ObservableObject {
         } else {
             applyFilters()
         }
+        NotificationCenter.default.addObserver(
+            forName: .syncEnginePulledRemote,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let items = notification.userInfo?["items"] as? [ReminderDTO]
+            else { return }
+            Swift.Task { @MainActor in self.mergeRemote(items) }
+        }
+    }
+
+    /// Called once after sign-in to do a full server pull and re-schedule any
+    /// future-due reminders. Local notifications survive across sessions because
+    /// the OS keeps them, but we re-schedule defensively to handle reinstall.
+    func bootstrapAfterLogin(accessToken: String?) async {
+        syncState = .syncing
+        await SyncEngine.shared.runOnce(accessToken: accessToken)
+        for task in tasks where task.dueDate > Date() && task.deletedAt == nil && task.reminderEnabled {
+            await NotificationManager.shared.schedule(for: task)
+        }
+        syncState = .idle
+    }
+
+    private func mergeRemote(_ items: [ReminderDTO]) {
+        var byID: [UUID: Task] = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0) })
+        for dto in items {
+            let remote = dto.toTask()
+            if let local = byID[remote.id] {
+                let localStamp = local.serverUpdatedAt ?? .distantPast
+                let remoteStamp = remote.serverUpdatedAt ?? .distantPast
+                if remoteStamp >= localStamp {
+                    byID[remote.id] = remote
+                }
+            } else {
+                byID[remote.id] = remote
+            }
+        }
+        tasks = Array(byID.values).filter { $0.deletedAt == nil }
+        applyFilters()
+        store.save(tasks)
     }
 
     func loadTasks() {
@@ -43,7 +87,7 @@ final class TaskViewModel: ObservableObject {
         persistChanges()
 
         Task {
-            await NotificationManager.shared.scheduleNotification(for: newTask)
+            await NotificationManager.shared.schedule(for: newTask)
         }
     }
 
@@ -57,7 +101,7 @@ final class TaskViewModel: ObservableObject {
             if task.isCompleted || !task.reminderEnabled {
                 await NotificationManager.shared.removeNotification(for: task)
             } else {
-                await NotificationManager.shared.scheduleNotification(for: task)
+                await NotificationManager.shared.schedule(for: task)
             }
         }
     }
@@ -73,7 +117,7 @@ final class TaskViewModel: ObservableObject {
             if updatedTask.isCompleted {
                 await NotificationManager.shared.removeNotification(for: updatedTask)
             } else if updatedTask.reminderEnabled {
-                await NotificationManager.shared.scheduleNotification(for: updatedTask)
+                await NotificationManager.shared.schedule(for: updatedTask)
             }
         }
     }
